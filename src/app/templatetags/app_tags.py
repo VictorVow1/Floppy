@@ -6,6 +6,7 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils import formats, timezone
 from django.utils.dateparse import parse_date
+from django.utils.timesince import timeuntil
 from django.utils.html import format_html
 from unidecode import unidecode
 
@@ -786,6 +787,27 @@ def user_event_time(event, user):
         # Fallback to default format if there's an error
         local_dt = timezone.localtime(event.datetime)
         return f"at {local_dt.strftime('%H:%M')}"
+
+
+@register.filter
+def time_until_air(event):
+    """Return a compact single-unit countdown until an event airs (e.g. "9 hours").
+
+    Returns an empty string for missing, sentinel, or non-future events so the
+    countdown pill can be hidden.
+    """
+    if not event or not hasattr(event, "datetime"):
+        return ""
+    if getattr(event, "is_max_datetime", False):
+        return ""
+
+    try:
+        if event.datetime <= timezone.now():
+            return ""
+    except (ValueError, TypeError, AttributeError):
+        return ""
+
+    return timeuntil(event.datetime, depth=1)
 
 
 @register.filter

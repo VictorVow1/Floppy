@@ -1,0 +1,1 @@
+{% load app_tags %}{% if media.next_event.content_number %}{% if media.next_event.season_number %}S{{ media.next_event.season_number }} E{{ media.next_event.content_number }}{% else %}{{ media.item.media_type|short_unit }}{{ media.next_event.content_number }}{% endif %}{% else %}Release{% endif %}

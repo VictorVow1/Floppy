@@ -53,11 +53,7 @@
                       {% if show_next_event_chip|default:False and media.next_event and not media.next_event.is_max_datetime %}
                         {% include "app/icons/clock.svg" with classes="w-3.5 h-3.5 text-indigo-400" %}
                         <span class="text-xs font-medium text-white drop-shadow-sm truncate min-w-0">
-                          {% if media.next_event.content_number %}
-                            {{ media.item.media_type|short_unit }}{{ media.next_event.content_number }}
-                          {% else %}
-                            Release
-                          {% endif %}
+                          {% include "app/components/_next_event_unit.html" %}
                         </span>
                       {% elif media.aggregated_status %}
                         {% with status_value=media.aggregated_status %}
@@ -98,11 +94,7 @@
                          data-mobile-hide-on-mobile="{% if current_sort_value == 'score' or current_sort_value == 'time_left' or current_sort_value == 'progress' %}true{% else %}false{% endif %}">
                       {% include "app/icons/clock.svg" with classes="w-3.5 h-3.5 text-indigo-400" %}
                       <span class="text-xs font-medium text-white drop-shadow-sm truncate min-w-0">
-                        {% if media.next_event.content_number %}
-                          {{ media.item.media_type|short_unit }}{{ media.next_event.content_number }}
-                        {% else %}
-                          Release
-                        {% endif %}
+                        {% include "app/components/_next_event_unit.html" %}
                       </span>
                     </div>
                   {% endif %}
@@ -111,16 +103,26 @@
                        data-mobile-hide-on-mobile="{% if current_sort_value == 'score' or current_sort_value == 'time_left' or current_sort_value == 'progress' %}true{% else %}false{% endif %}">
                     {% include "app/icons/clock.svg" with classes="w-3.5 h-3.5 text-indigo-400" %}
                     <span class="text-xs font-medium text-white drop-shadow-sm truncate min-w-0">
-                      {% if media.next_event.content_number %}
-                        {{ media.item.media_type|short_unit }}{{ media.next_event.content_number }}
-                      {% else %}
-                        Release
-                      {% endif %}
+                      {% include "app/components/_next_event_unit.html" %}
                     </span>
                   </div>
                 {% endif %}
               {% endwith %}
             {% endif %}
+          {% endif %}
+
+          {# Countdown pill under the next-episode chip: time until the next episode airs. #}
+          {% if show_next_event_chip|default:False and media and media.next_event and not media.next_event.is_max_datetime %}
+            {% with air_countdown=media.next_event|time_until_air %}
+              {% if air_countdown %}
+                <div class="media-next-event-countdown absolute top-10 left-2 bg-gray-900/90 text-white text-xs px-2 py-1 rounded-md flex items-center gap-1.5 shadow-md max-w-[calc(100%-1rem)] overflow-hidden"
+                     data-mobile-hide-on-mobile="{% if current_sort_value == 'score' or current_sort_value == 'time_left' or current_sort_value == 'progress' %}true{% else %}false{% endif %}"
+                     title="{{ media.next_event.datetime|user_datetime_format:user }}">
+                  {% include "app/icons/clock.svg" with classes="w-3.5 h-3.5 text-indigo-400" %}
+                  <span class="text-xs font-medium text-white drop-shadow-sm truncate min-w-0">{{ air_countdown }}</span>
+                </div>
+              {% endif %}
+            {% endwith %}
           {% endif %}
 
           {% if resolved_media_type == MediaTypes.SEASON.value and item.provider_metadata_status == "local_only_missing_season" %}
@@ -510,11 +512,7 @@
                 </p>
               {% elif show_next_event_subtitle|default:False and media and media.next_event and not media.next_event.is_max_datetime %}
                 <p class="media-card-year text-xs text-gray-400 mt-1">
-                  {% if media.next_event.content_number %}
-                    {{ media.item.media_type|short_unit }}{{ media.next_event.content_number }}
-                  {% else %}
-                    Release
-                  {% endif %}
+                  {% include "app/components/_next_event_unit.html" %}
                   {% with event_time=media.next_event|user_event_time:user %}
                     {% if media.next_event|event_within_days:7 %}
                       • {{ media.next_event.datetime|date:"D" }}{% if event_time %} {{ event_time }}{% endif %}

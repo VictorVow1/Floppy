@@ -454,7 +454,8 @@ def _default_recent_row_direction() -> str:
     return DirectionChoices.DESC
 
 
-def _build_default_rows_for_media_type(user, media_type: str) -> list[HomeScreenRow]:
+def _progress_default_rows_for_media_type(user, media_type: str) -> list[HomeScreenRow]:
+    """Return the in-progress (and optional planned) library rows for a type."""
     sort_by = _home_default_library_sort(media_type, user)
     default_filters = dict(HOME_QUERY_DEFAULT_FILTERS)
     if media_type in HOME_PROGRESS_MEDIA_TYPES:
@@ -486,6 +487,42 @@ def _build_default_rows_for_media_type(user, media_type: str) -> list[HomeScreen
                 filters=planned_filters,
             ),
         )
+    return defaults
+
+
+def _upcoming_default_row_for_media_type(
+    user,
+    media_type: str,
+    *,
+    progress: str = "caught_up",
+) -> HomeScreenRow:
+    """Return the "In Progress • Upcoming" row shown above the not-caught-up row.
+
+    Shows the user is behind on already appear in the "Not Caught Up" row below,
+    so this row defaults to caught-up shows only to avoid listing titles twice.
+    """
+    filters = dict(HOME_QUERY_DEFAULT_FILTERS)
+    filters["progress"] = progress
+    return HomeScreenRow(
+        user=user,
+        media_type=media_type,
+        position=0,
+        enabled=True,
+        row_type=HomeScreenRowTypeChoices.LIBRARY_QUERY,
+        sort_by=HomeSortChoices.UPCOMING,
+        direction=resolve_home_row_direction(HomeSortChoices.UPCOMING),
+        filters=filters,
+    )
+
+
+def _build_default_rows_for_media_type(user, media_type: str) -> list[HomeScreenRow]:
+    defaults = _progress_default_rows_for_media_type(user, media_type)
+    # TV shows lead with an Upcoming row (next-episode air countdown) above the
+    # standard "Not Caught Up" row, mirroring the TV Season home layout.
+    if media_type == MediaTypes.TV.value:
+        defaults = [_upcoming_default_row_for_media_type(user, media_type), *defaults]
+        for index, row in enumerate(defaults):
+            row.position = index
     return defaults
 
 
@@ -593,7 +630,7 @@ def _single_query_default_rows_for_media_type(
 
 def _legacy_default_row_variants_for_media_type(user, media_type: str) -> list[list[HomeScreenRow]]:
     """Return historical seeded row layouts that should upgrade in place."""
-    return [
+    variants = [
         _legacy_default_rows_for_media_type(user, media_type),
         _single_query_default_rows_for_media_type(
             user,
@@ -605,7 +642,21 @@ def _legacy_default_row_variants_for_media_type(user, media_type: str) -> list[l
             media_type,
             _preferred_default_library_sort(user, media_type),
         ),
+        # Layout seeded before TV gained its leading Upcoming row; recognizing
+        # it lets those rows upgrade in place to include the new row.
+        _progress_default_rows_for_media_type(user, media_type),
     ]
+    if media_type == MediaTypes.TV.value:
+        # Layout seeded when the Upcoming row had no caught-up filter, so it
+        # repeated shows already listed in the Not Caught Up row below.
+        unfiltered_upcoming = [
+            _upcoming_default_row_for_media_type(user, media_type, progress="all"),
+            *_progress_default_rows_for_media_type(user, media_type),
+        ]
+        for index, row in enumerate(unfiltered_upcoming):
+            row.position = index
+        variants.append(unfiltered_upcoming)
+    return variants
 
 
 def _rows_match_signature(
@@ -1825,7 +1876,7 @@ def sort_home_entries(entries: list[HomeRowEntry], sort_by: str, direction: str)
     """Sort Home row wrappers with graceful handling for list rows lacking media."""
     media_entries = [entry.media for entry in entries if entry.media]
     if sort_by == HomeSortChoices.UPCOMING and media_entries:
-        BasicMedia.objects._annotate_next_event(media_entries)
+        BasicMedia.objects.annotate_home_next_event(media_entries)
         with_events = []
         without_events = []
         for entry in entries:

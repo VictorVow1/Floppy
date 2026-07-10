@@ -1167,6 +1167,75 @@ class MediaManager(models.Manager):
 
             media.next_event = future_events[0] if future_events else None
 
+    def annotate_home_next_event(self, media_list):
+        """Annotate next_event for a mixed home-row media list.
+
+        TV shows keep their calendar events on Season items, so the generic
+        per-item lookup (which reads ``item.prefetched_events``) finds nothing
+        for them. Resolve their next upcoming episode from the show's season
+        events instead so the Home "Upcoming" row can surface an air-date chip.
+        """
+        tv_media = []
+        other_media = []
+        for media in media_list:
+            item = getattr(media, "item", None)
+            if getattr(item, "media_type", None) == MediaTypes.TV.value:
+                tv_media.append(media)
+            else:
+                other_media.append(media)
+
+        self._annotate_next_event(other_media)
+        if tv_media:
+            self._annotate_tv_next_event(tv_media)
+
+    def _annotate_tv_next_event(self, media_list):
+        """Set next_event to the earliest upcoming episode across a show's seasons.
+
+        A single query pulls future season events for every show in the list,
+        covering both tracked seasons and seasons the user hasn't started yet
+        (which have calendar events but no Season row). The chosen event is
+        tagged with ``season_number`` so cards can render "S3 E1".
+        """
+        current_time = timezone.now()
+        show_keys = {
+            (media.item.media_id, media.item.source)
+            for media in media_list
+            if getattr(media, "item", None) is not None
+        }
+        if not show_keys:
+            for media in media_list:
+                media.next_event = None
+            return
+
+        future_events = (
+            events.models.Event.objects.filter(
+                item__media_id__in={media_id for media_id, _ in show_keys},
+                item__source__in={source for _, source in show_keys},
+                item__media_type=MediaTypes.SEASON.value,
+                item__season_number__gt=0,
+                content_number__isnull=False,
+                datetime__gt=current_time,
+                # Exclude the year-9999 sentinel used for unknown air dates.
+                datetime__year__lt=events.models.SentinelDatetime.YEAR,
+            )
+            .select_related("item")
+            .order_by("datetime")
+        )
+
+        earliest_by_show = {}
+        for event in future_events:
+            key = (event.item.media_id, event.item.source)
+            if key in show_keys and key not in earliest_by_show:
+                earliest_by_show[key] = event
+
+        for media in media_list:
+            item = getattr(media, "item", None)
+            key = (getattr(item, "media_id", None), getattr(item, "source", None))
+            event = earliest_by_show.get(key)
+            if event is not None:
+                event.season_number = event.item.season_number
+            media.next_event = event
+
     def _fix_missing_season_images(self, season_list):
         """Annotate season cards with a display fallback without persisting it."""
         from app import helpers

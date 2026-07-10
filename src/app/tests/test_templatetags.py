@@ -284,6 +284,35 @@ class AppTagsTests(TestCase):
             "not-a-date",
         )
 
+    def test_time_until_air_returns_single_unit_countdown(self):
+        """time_until_air returns a compact countdown for future events only."""
+        from datetime import timedelta
+
+        now = timezone.now()
+        soon = SimpleNamespace(
+            datetime=now + timedelta(hours=9, minutes=20),
+            is_max_datetime=False,
+        )
+        far = SimpleNamespace(
+            datetime=now + timedelta(days=3, hours=5),
+            is_max_datetime=False,
+        )
+        past = SimpleNamespace(
+            datetime=now - timedelta(hours=1),
+            is_max_datetime=False,
+        )
+        sentinel = SimpleNamespace(
+            datetime=now + timedelta(days=1),
+            is_max_datetime=True,
+        )
+
+        # Non-breaking space separates the number and unit; normalize for compare.
+        self.assertEqual(app_tags.time_until_air(soon).replace("\xa0", " "), "9 hours")
+        self.assertEqual(app_tags.time_until_air(far).replace("\xa0", " "), "3 days")
+        self.assertEqual(app_tags.time_until_air(past), "")
+        self.assertEqual(app_tags.time_until_air(sentinel), "")
+        self.assertEqual(app_tags.time_until_air(None), "")
+
     @patch("app.templatetags.app_tags.date")
     def test_format_date_range_display_prefers_this_month_over_last_7_days(self, mock_date):
         """Month-to-date ranges should keep the month label even when they span 7 days."""

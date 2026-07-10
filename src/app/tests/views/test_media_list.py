@@ -33,6 +33,8 @@ from app.models import (
 )
 from app.templatetags import app_tags
 from events.models import Event
+from users.home_screen import _build_default_rows_for_media_type
+from users.models import HomeSortChoices
 
 
 class MediaListViewTests(TestCase):
@@ -1988,6 +1990,121 @@ class MediaListViewTests(TestCase):
 
         air_date = BasicMedia.objects._next_episode_air_date_value(tv)
         self.assertEqual(air_date, season2_release)
+
+    def test_home_next_event_picks_earliest_future_tv_episode(self):
+        """TV shows resolve next_event to the soonest upcoming episode."""
+        now = timezone.now()
+        past = now - timedelta(days=7)
+        later = now + timedelta(days=3)
+        soon = now + timedelta(hours=7)
+
+        tv, _season = self._create_tv_next_episode_air_date_entry(
+            "home-tv-upcoming",
+            "Upcoming Show",
+            [past, later, soon],
+            progress=1,
+        )
+
+        BasicMedia.objects.annotate_home_next_event([tv])
+
+        self.assertIsNotNone(tv.next_event)
+        self.assertEqual(tv.next_event.datetime, soon)
+        self.assertEqual(tv.next_event.content_number, 3)
+        self.assertEqual(tv.next_event.season_number, 1)
+
+    def test_home_next_event_includes_untracked_season_episodes(self):
+        """Upcoming episodes in seasons without a Season row still surface."""
+        now = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        season1_release = now - timedelta(days=30)
+        season2_release = now + timedelta(days=1)
+
+        tv, _season = self._create_tv_next_episode_air_date_entry(
+            "home-tv-upcoming-untracked",
+            "Untracked Upcoming Show",
+            [season1_release, season1_release + timedelta(days=7)],
+            progress=2,
+        )
+
+        untracked_season_item = Item.objects.create(
+            media_id="home-tv-upcoming-untracked",
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.SEASON.value,
+            title="Untracked Upcoming Show Season 2",
+            image="http://example.com/home-tv-upcoming-season2.jpg",
+            season_number=2,
+        )
+        Event.objects.create(
+            item=untracked_season_item,
+            content_number=1,
+            datetime=season2_release,
+            notification_sent=False,
+        )
+
+        BasicMedia.objects.annotate_home_next_event([tv])
+
+        self.assertIsNotNone(tv.next_event)
+        self.assertEqual(tv.next_event.datetime, season2_release)
+        self.assertEqual(tv.next_event.season_number, 2)
+
+    def test_home_next_event_none_without_future_tv_episodes(self):
+        """Shows whose episodes have all aired get no upcoming next_event."""
+        now = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        tv, _season = self._create_tv_next_episode_air_date_entry(
+            "home-tv-no-upcoming",
+            "Finished Airing Show",
+            [now - timedelta(days=14), now - timedelta(days=7)],
+            progress=1,
+        )
+
+        BasicMedia.objects.annotate_home_next_event([tv])
+
+        self.assertIsNone(tv.next_event)
+
+    def test_home_card_renders_air_countdown_pill_for_upcoming_tv(self):
+        """The home card shows a countdown pill when the show has a future episode."""
+        now = timezone.now()
+        tv, _season = self._create_tv_next_episode_air_date_entry(
+            "home-tv-countdown",
+            "Countdown Show",
+            [now - timedelta(days=7), now + timedelta(days=3, hours=2)],
+            progress=1,
+        )
+
+        BasicMedia.objects.annotate_home_next_event([tv])
+        self.assertIsNotNone(tv.next_event)
+
+        html = render_to_string(
+            "app/components/media_card.html",
+            {
+                "media": tv,
+                "item": tv.item,
+                "user": self.user,
+                "from_grid": True,
+                "title": tv.item.title,
+                "show_next_event_chip": True,
+                "show_next_event_subtitle": True,
+                "show_status_chip": True,
+                "MediaTypes": MediaTypes,
+                "Status": Status,
+                "IMG_NONE": "/x.png",
+            },
+        )
+
+        self.assertIn("media-next-event-countdown", html)
+        self.assertIn("3\xa0days", html)
+
+    def test_default_tv_rows_lead_with_upcoming_above_not_caught_up(self):
+        """TV home defaults seed an Upcoming row above the Not Caught Up row."""
+        rows = _build_default_rows_for_media_type(self.user, MediaTypes.TV.value)
+
+        self.assertGreaterEqual(len(rows), 2)
+        self.assertEqual(rows[0].position, 0)
+        self.assertEqual(rows[0].sort_by, HomeSortChoices.UPCOMING)
+        # Not-caught-up shows already live in the row below; the Upcoming row
+        # only lists caught-up shows so titles don't appear twice.
+        self.assertEqual(rows[0].filters.get("progress"), "caught_up")
+        self.assertEqual(rows[1].position, 1)
+        self.assertEqual(rows[1].filters.get("progress"), "not_caught_up")
 
     def test_anime_sort_by_next_episode_air_date_orders_grouped_and_flat_rows(self):
         self.user.date_format = "iso_8601"

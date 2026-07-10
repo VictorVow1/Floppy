@@ -43,9 +43,10 @@ class HomeScreenViewTests(TestCase):
         enabled_set = set(enabled_media_types)
         update_fields = []
         for media_type in MediaTypes.values:
-            if media_type == MediaTypes.EPISODE.value:
-                continue
             field_name = f"{media_type}_enabled"
+            # Sub-types such as episode and comicissue have no enabled toggle.
+            if not hasattr(self.user, field_name):
+                continue
             setattr(self.user, field_name, media_type in enabled_set)
             update_fields.append(field_name)
         self.user.save(update_fields=update_fields)
@@ -589,7 +590,7 @@ class HomeScreenViewTests(TestCase):
             section["media_type"]: section
             for section in json.loads(response.context["home_screen_sections_json"])
         }
-        self.assertEqual(len(sections[MediaTypes.TV.value]["rows"]), 1)
+        self.assertEqual(len(sections[MediaTypes.TV.value]["rows"]), 2)
         self.assertEqual(len(sections[MediaTypes.ANIME.value]["rows"]), 1)
         self.assertEqual(len(sections[MediaTypes.SEASON.value]["rows"]), 1)
         self.assertEqual(sections[MediaTypes.SEASON.value]["rows"][0]["sort_by"], HomeSortChoices.UPCOMING)
@@ -597,26 +598,38 @@ class HomeScreenViewTests(TestCase):
         self.assertEqual(sections[MediaTypes.MOVIE.value]["rows"][0]["sort_by"], HomeSortChoices.RECENT)
         self.assertEqual(
             sections[MediaTypes.TV.value]["rows"][0]["sort_by"],
-            MediaSortChoices.NEXT_EPISODE_AIR_DATE,
-        )
-        self.assertEqual(
-            sections[MediaTypes.TV.value]["rows"][0]["direction"],
-            DirectionChoices.DESC,
-        )
-        self.assertEqual(
-            sections[MediaTypes.TV.value]["rows"][0]["filters"]["status"],
-            Status.IN_PROGRESS.value,
+            HomeSortChoices.UPCOMING,
         )
         self.assertEqual(
             sections[MediaTypes.TV.value]["rows"][0]["filters"]["progress"],
+            "caught_up",
+        )
+        self.assertEqual(
+            sections[MediaTypes.TV.value]["rows"][1]["sort_by"],
+            MediaSortChoices.NEXT_EPISODE_AIR_DATE,
+        )
+        self.assertEqual(
+            sections[MediaTypes.TV.value]["rows"][1]["direction"],
+            DirectionChoices.DESC,
+        )
+        self.assertEqual(
+            sections[MediaTypes.TV.value]["rows"][1]["filters"]["status"],
+            Status.IN_PROGRESS.value,
+        )
+        self.assertEqual(
+            sections[MediaTypes.TV.value]["rows"][1]["filters"]["progress"],
             "not_caught_up",
         )
         self.assertEqual(
             sections[MediaTypes.TV.value]["rows"][0]["title"],
+            "In Progress • Caught Up",
+        )
+        self.assertEqual(
+            sections[MediaTypes.TV.value]["rows"][1]["title"],
             "In Progress • Not Caught Up",
         )
         self.assertEqual(
-            sections[MediaTypes.TV.value]["rows"][0]["summary"],
+            sections[MediaTypes.TV.value]["rows"][1]["summary"],
             "Sorted by Episode Air Date • Descending",
         )
         self.assertEqual(
@@ -755,15 +768,20 @@ class HomeScreenViewTests(TestCase):
         response = self.client.get(reverse("home_screen"))
 
         self.assertEqual(response.status_code, 200)
-        tv_row = HomeScreenRow.objects.get(
-            user=self.user,
-            media_type=MediaTypes.TV.value,
-            row_type=HomeScreenRowTypeChoices.LIBRARY_QUERY,
+        tv_rows = list(
+            HomeScreenRow.objects.filter(
+                user=self.user,
+                media_type=MediaTypes.TV.value,
+                row_type=HomeScreenRowTypeChoices.LIBRARY_QUERY,
+            ).order_by("position"),
         )
-        self.assertEqual(tv_row.sort_by, MediaSortChoices.NEXT_EPISODE_AIR_DATE)
-        self.assertEqual(tv_row.direction, DirectionChoices.DESC)
-        self.assertEqual(tv_row.filters["status"], Status.IN_PROGRESS.value)
-        self.assertEqual(tv_row.filters["progress"], "not_caught_up")
+        self.assertEqual(len(tv_rows), 2)
+        self.assertEqual(tv_rows[0].sort_by, HomeSortChoices.UPCOMING)
+        self.assertEqual(tv_rows[0].filters["progress"], "caught_up")
+        self.assertEqual(tv_rows[1].sort_by, MediaSortChoices.NEXT_EPISODE_AIR_DATE)
+        self.assertEqual(tv_rows[1].direction, DirectionChoices.DESC)
+        self.assertEqual(tv_rows[1].filters["status"], Status.IN_PROGRESS.value)
+        self.assertEqual(tv_rows[1].filters["progress"], "not_caught_up")
 
         anime_row = HomeScreenRow.objects.get(
             user=self.user,
@@ -813,15 +831,82 @@ class HomeScreenViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         for media_type in (MediaTypes.TV.value, MediaTypes.ANIME.value):
-            row = HomeScreenRow.objects.get(
-                user=self.user,
-                media_type=media_type,
-                row_type=HomeScreenRowTypeChoices.LIBRARY_QUERY,
+            rows = list(
+                HomeScreenRow.objects.filter(
+                    user=self.user,
+                    media_type=media_type,
+                    row_type=HomeScreenRowTypeChoices.LIBRARY_QUERY,
+                ).order_by("position"),
             )
+            if media_type == MediaTypes.TV.value:
+                self.assertEqual(len(rows), 2)
+                self.assertEqual(rows[0].sort_by, HomeSortChoices.UPCOMING)
+                self.assertEqual(rows[0].filters["progress"], "caught_up")
+                row = rows[1]
+            else:
+                self.assertEqual(len(rows), 1)
+                row = rows[0]
             self.assertEqual(row.sort_by, MediaSortChoices.NEXT_EPISODE_AIR_DATE)
             self.assertEqual(row.direction, DirectionChoices.DESC)
             self.assertEqual(row.filters["status"], Status.IN_PROGRESS.value)
             self.assertEqual(row.filters["progress"], "not_caught_up")
+
+    def test_home_screen_get_upgrades_unfiltered_tv_upcoming_default(self):
+        """TV layouts seeded with an unfiltered Upcoming row gain caught-up."""
+        self._set_enabled_media_types(MediaTypes.TV.value)
+        base_filters = {
+            "status": Status.IN_PROGRESS.value,
+            "progress": "all",
+            "rating": "all",
+            "collection": "all",
+            "genre": "",
+            "year": "",
+            "release": "all",
+            "source": "",
+            "language": "",
+            "country": "",
+            "platform": "",
+            "origin": "",
+            "format": "",
+            "author": "",
+            "tag": "",
+            "tag_exclude": "",
+        }
+        HomeScreenRow.objects.create(
+            user=self.user,
+            media_type=MediaTypes.TV.value,
+            position=0,
+            enabled=True,
+            row_type=HomeScreenRowTypeChoices.LIBRARY_QUERY,
+            sort_by=HomeSortChoices.UPCOMING,
+            direction=DirectionChoices.ASC,
+            filters=base_filters,
+        )
+        HomeScreenRow.objects.create(
+            user=self.user,
+            media_type=MediaTypes.TV.value,
+            position=1,
+            enabled=True,
+            row_type=HomeScreenRowTypeChoices.LIBRARY_QUERY,
+            sort_by=MediaSortChoices.NEXT_EPISODE_AIR_DATE,
+            direction=DirectionChoices.DESC,
+            filters={**base_filters, "progress": "not_caught_up"},
+        )
+
+        response = self.client.get(reverse("home_screen"))
+
+        self.assertEqual(response.status_code, 200)
+        rows = list(
+            HomeScreenRow.objects.filter(
+                user=self.user,
+                media_type=MediaTypes.TV.value,
+                row_type=HomeScreenRowTypeChoices.LIBRARY_QUERY,
+            ).order_by("position"),
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].sort_by, HomeSortChoices.UPCOMING)
+        self.assertEqual(rows[0].filters["progress"], "caught_up")
+        self.assertEqual(rows[1].filters["progress"], "not_caught_up")
 
     def test_home_screen_get_upgrades_original_single_row_seeded_anime_defaults(self):
         self._set_enabled_media_types(MediaTypes.ANIME.value)
